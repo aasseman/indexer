@@ -5,6 +5,7 @@ import {
   BytesWriter,
   toAddress,
   formatGRT,
+  Address,
 } from '@graphprotocol/common-ts'
 import {
   Allocation,
@@ -43,7 +44,7 @@ export interface AllocationReceiptCollectorOptions {
 }
 
 export interface ReceiptCollector {
-  rememberAllocations(allocations: Allocation[]): Promise<boolean>
+  rememberAllocations(allocationIDs: Address[]): Promise<boolean>
   collectReceipts(allocation: Allocation): Promise<boolean>
 }
 
@@ -84,10 +85,8 @@ export class AllocationReceiptCollector implements ReceiptCollector {
     this.startVoucherProcessing()
   }
 
-  async rememberAllocations(allocations: Allocation[]): Promise<boolean> {
-    const logger = this.logger.child({
-      allocations: allocations.map((allocation) => allocation.id),
-    })
+  async rememberAllocations(allocationIDs: Address[]): Promise<boolean> {
+    const logger = this.logger.child({ allocations: allocationIDs })
 
     try {
       logger.info('Remember allocations for collecting receipts later')
@@ -95,10 +94,10 @@ export class AllocationReceiptCollector implements ReceiptCollector {
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
       await this.models.allocationSummaries.sequelize!.transaction(
         async (transaction) => {
-          for (const allocation of allocations) {
+          for (const allocation of allocationIDs) {
             const [summary] = await ensureAllocationSummary(
               this.models,
-              allocation.id,
+              allocation,
               transaction,
             )
             await summary.save()

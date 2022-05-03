@@ -14,6 +14,7 @@ import { NetworkSubgraph } from '../network-subgraph'
 
 import { IndexerManagementModels, IndexingRuleCreationAttributes } from './models'
 
+import actionResolvers from './resolvers/actions'
 import allocationResolvers from './resolvers/allocations'
 import costModelResolvers from './resolvers/cost-models'
 import indexingRuleResolvers from './resolvers/indexing-rules'
@@ -25,6 +26,8 @@ import { IndexingStatusResolver } from '../indexing-status'
 import { TransactionManager } from '../transactions'
 import { SubgraphManager } from './subgraphs'
 import { AllocationReceiptCollector } from '../allocations/query-fees'
+import { ActionManager } from '@graphprotocol/indexer-common'
+import { IndexerWorker } from './worker'
 
 export interface IndexerManagementFeatures {
   injectDai: boolean
@@ -41,6 +44,7 @@ export interface IndexerManagementResolverContext {
   defaults: IndexerManagementDefaults
   features: IndexerManagementFeatures
   dai: Eventual<string>
+  actionManager: ActionManager
   transactionManager: TransactionManager
   receiptCollector: AllocationReceiptCollector
 }
@@ -103,12 +107,79 @@ const SCHEMA_SDL = gql`
     receiptsWorthCollecting: Boolean!
   }
 
-  type reallocateAllocationResult {
+  type ReallocateAllocationResult {
     closedAllocation: String!
     indexingRewardsCollected: String!
     receiptsWorthCollecting: Boolean!
     createdAllocation: String!
     createdAllocationStake: String!
+  }
+
+  enum ActionStatus {
+    queued
+    approved
+    pending
+    success
+    failed
+    canceled
+  }
+
+  enum ActionType {
+    allocate
+    unallocate
+    reallocate
+    collect
+  }
+
+  type Action {
+    id: Int!
+    status: ActionStatus!
+    type: ActionType!
+    deploymentID: String
+    allocationID: String
+    amount: String
+    poi: String
+    force: Boolean
+    priority: Int!
+    source: String!
+    reason: String!
+    transaction: String
+    createdAt: BigInt!
+    updatedAt: BigInt
+  }
+
+  input ActionInput {
+    status: ActionStatus!
+    type: ActionType!
+    deploymentID: String
+    allocationID: String
+    amount: String
+    poi: String
+    force: Boolean
+    source: String!
+    reason: String!
+    priority: Int
+  }
+
+  type ActionResult {
+    id: Int!
+    type: ActionType!
+    deploymentID: String
+    allocationID: String
+    amount: String
+    poi: String
+    force: Boolean
+    source: String!
+    reason: String!
+    status: String!
+    transaction: String
+  }
+
+  input ActionFilter {
+    type: ActionType
+    status: String
+    source: String
+    reason: String
   }
 
   type POIDispute {
@@ -270,6 +341,9 @@ const SCHEMA_SDL = gql`
     disputesClosedAfter(closedAfterBlock: BigInt!): [POIDispute]!
 
     allocations(filter: AllocationFilter!): [Allocation!]!
+
+    action(actionID: String!): Action
+    actions(filter: ActionFilter): [Action]!
   }
 
   type Mutation {
@@ -297,7 +371,13 @@ const SCHEMA_SDL = gql`
       poi: String
       amount: String!
       force: Boolean
-    ): reallocateAllocationResult!
+    ): ReallocateAllocationResult!
+
+    updateAction(action: ActionInput!): Action!
+    queueActions(actions: [ActionInput!]!): [Action]!
+    cancelActions(actionIDs: [String!]!): [Action]!
+    approveActions(actionIDs: [String!]!): [Action]!
+    executeActions(actionIDs: [String!]!, force: Boolean): [ActionResult!]!
   }
 `
 
@@ -320,6 +400,7 @@ export interface IndexerManagementClientOptions {
   defaults: IndexerManagementDefaults
   features: IndexerManagementFeatures
   transactionManager?: TransactionManager
+  actionManager?: ActionManager
   receiptCollector?: AllocationReceiptCollector
 }
 
@@ -360,8 +441,9 @@ export class IndexerManagementClient extends Client {
         variables: Sequelize.literal(`coalesce(variables, '{}'::jsonb) || ${update}`),
       },
       {
-        // This is just a non-obvious way to match all models
-        where: { deployment: { [Op.not]: null } },
+        // This is just a non-obvious way to match all rows with models
+        // TODO: update to match all rows??
+        where: { model: { [Op.not]: null } },
       },
     )
   }
@@ -382,6 +464,7 @@ export const createIndexerManagementClient = async (
     defaults,
     features,
     transactionManager,
+    actionManager,
     receiptCollector,
   } = options
   const schema = buildSchema(print(SCHEMA_SDL))
@@ -391,11 +474,20 @@ export const createIndexerManagementClient = async (
     ...costModelResolvers,
     ...poiDisputeResolvers,
     ...allocationResolvers,
+    ...actionResolvers,
   }
 
   const dai: WritableEventual<string> = mutable()
 
   const subgraphManager = new SubgraphManager(deploymentManagementEndpoint, indexNodeIDs)
+  if (actionManager && logger) {
+    const indexerWorker = new IndexerWorker(
+      actionManager,
+      actionManager.allocationManager,
+      logger,
+    )
+    await indexerWorker.start(logger)
+  }
 
   const exchange = executeExchange({
     schema,
@@ -412,6 +504,7 @@ export const createIndexerManagementClient = async (
       features,
       dai,
       transactionManager,
+      actionManager,
       receiptCollector,
     },
   })

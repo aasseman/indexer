@@ -12,6 +12,7 @@ import {
   toAddress,
 } from '@graphprotocol/common-ts'
 import {
+  ActionManager,
   AllocationReceiptCollector,
   createIndexerManagementClient,
   createIndexerManagementServer,
@@ -31,6 +32,9 @@ import { startCostModelAutomation } from '../cost'
 import { createSyncingServer } from '../syncing-server'
 import { monitorEthBalance } from '../utils'
 import { AllocationManagementMode } from '../types'
+import { NetworkMonitor } from '@graphprotocol/indexer-common'
+import { AllocationManager } from '@graphprotocol/indexer-common/dist/indexer-management/allocations'
+import { SubgraphManager } from '@graphprotocol/indexer-common/dist/indexer-management/subgraphs'
 
 export default {
   command: 'start',
@@ -735,6 +739,35 @@ export default {
     })
     await receiptCollector.queuePendingReceiptsFromDatabase()
 
+    const networkMonitor = new NetworkMonitor(
+      contracts,
+      toAddress(indexerAddress),
+      logger,
+      indexingStatusResolver,
+      networkSubgraph,
+      network.transactionManager,
+    )
+
+    // TODO: move inside createIndexerManagementClient?
+    const subgraphManager = new SubgraphManager(
+      argv.graphNodeAdminEndpoint,
+      argv.indexNodeIds,
+    )
+    const allocationManager = new AllocationManager(
+      contracts,
+      logger,
+      indexerAddress,
+      indexingStatusResolver,
+      managementModels,
+      network,
+      networkSubgraph,
+      subgraphManager,
+      network.transactionManager,
+      receiptCollector,
+      networkMonitor,
+    )
+    const actionManager = new ActionManager(allocationManager, managementModels)
+
     logger.info('Launch indexer management API server')
     const indexerManagementClient = await createIndexerManagementClient({
       models: managementModels,
@@ -754,9 +787,11 @@ export default {
       features: {
         injectDai: argv.injectDai,
       },
+      actionManager,
       transactionManager: network.transactionManager,
       receiptCollector,
     })
+
     await createIndexerManagementServer({
       logger,
       client: indexerManagementClient,
@@ -817,6 +852,7 @@ export default {
       metrics,
       indexer,
       network,
+      networkMonitor,
       networkSubgraph,
       allocateOnNetworkSubgraph: argv.allocateOnNetworkSubgraph,
       registerIndexer: argv.register,

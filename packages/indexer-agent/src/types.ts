@@ -5,6 +5,7 @@ import {
   ReceiptCollector,
 } from '@graphprotocol/indexer-common'
 import { Indexer } from './indexer'
+import { NetworkMonitor } from '@graphprotocol/indexer-common'
 
 export enum AllocationManagementMode {
   AUTO,
@@ -16,6 +17,7 @@ export interface AgentConfig {
   metrics: Metrics
   indexer: Indexer
   network: Network
+  networkMonitor: NetworkMonitor
   networkSubgraph: NetworkSubgraph
   allocateOnNetworkSubgraph: boolean
   registerIndexer: boolean
