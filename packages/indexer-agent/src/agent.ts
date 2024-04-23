@@ -988,10 +988,10 @@ export class Agent {
       }),
     )
 
-    // Stop indexing deployments that are no longer worth indexing
-    await queue.addAll(
-      remove.map(deployment => async () => this.graphNode.remove(deployment)),
-    )
+    // // Stop indexing deployments that are no longer worth indexing
+    // await queue.addAll(
+    //   remove.map(deployment => async () => this.graphNode.remove(deployment)),
+    // )
 
     await queue.onIdle()
     logger.debug('Finished reconciling deployments')
